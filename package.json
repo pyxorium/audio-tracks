@@ -1,0 +1,15 @@
+{
+  "name": "audio-tracks",
+  "version": "0.1.0",
+  "description": "The cafe.thunderbird.audio.* lexicons (audio tracks kept with their files on the author's own PDS), their publish script, and a script to list and delete track records",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "publish-lexicons": "node scripts/publish-lexicons.mjs"
+  }
+}
