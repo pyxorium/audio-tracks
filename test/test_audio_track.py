@@ -141,9 +141,9 @@ class AudioTrackTest(unittest.TestCase):
         self.assertIn('Audio tracks by @pyxorium.com', said)
         self.assertIn(f'  {SHOW}', said)
         self.assertIn('  Creek, April', said)
-        self.assertIn('7. Tchefuncte · Galactic  (1:02:05, 44.7 MB, webm)', said)
-        self.assertIn('3. Funky Bird · Galactic  (4:05, 2.9 MB, webm)', said)
-        self.assertIn('audio 48.4 MB', said)
+        self.assertIn('7. Tchefuncte · Galactic  (1:02:05, 42.63 MB, webm)', said)
+        self.assertIn('3. Funky Bird · Galactic  (4:05, 2.80 MB, webm)', said)
+        self.assertIn('audio 46.13 MB', said)
         self.assertEqual(self.writes(), [])
 
     def test_list_one_album_and_another_account(self):
@@ -155,7 +155,7 @@ class AudioTrackTest(unittest.TestCase):
 
     def test_a_dry_run_deletes_nothing_and_needs_no_password(self):
         _, said = self.run_quiet(at.delete, self.args(['delete', '--album', SHOW, '--dry-run']), env={}, ask=lambda q: self.fail('no question'))
-        self.assertIn('2 audio tracks by @pyxorium.com (audio 47.6 MB)', said)
+        self.assertIn('2 audio tracks by @pyxorium.com (audio 45.43 MB)', said)
         self.assertIn('Dry run: nothing was deleted.', said)
         self.assertEqual(self.mine(), ['3mzaaa', '3mzbbb', '3mzccc'])
         self.assertEqual(self.writes(), [])

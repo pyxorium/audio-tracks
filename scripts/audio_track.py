@@ -174,7 +174,12 @@ def blob_size(value):
 
 
 def megabytes(n):
-    return f'{n / 1_000_000:.1f} MB'
+    # As the Foundry shows sizes (src/core/fileset.js formatSize): 1 MB = 1,048,576 bytes.
+    if n < 1024:
+        return f'{n} B'
+    if n < 1024 * 1024:
+        return f'{n / 1024:.1f} KB'
+    return f'{n / 1024 / 1024:.2f} MB'
 
 
 def describe(record):
