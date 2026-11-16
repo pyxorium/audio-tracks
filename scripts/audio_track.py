@@ -1,4 +1,4 @@
-"""List and delete audio tracks (cafe.thunderbird.audio.track records) in your own atproto account.
+"""List, delete and renumber audio tracks (cafe.thunderbird.audio.track records) in your own atproto account.
 
 claude/mixtape-3b-importer-notes.md, R3b-12. The Web Tile Foundry's importer writes these records; this script is for
 looking at them and clearing out test imports. Standard library only: nothing to install. Run it from VS Code's
@@ -7,11 +7,15 @@ terminal in C:\\thunderbird-cafe\\audio-tracks:
     python scripts/audio_track.py list [--album "..."]
     python scripts/audio_track.py delete --rkey ... [--rkey ...] [--dry-run]
     python scripts/audio_track.py delete --album "..." [--dry-run]
+    python scripts/audio_track.py renumber --set KEY=NUMBER [--set KEY=NUMBER ...] [--dry-run]
+
+renumber sets a track's place in its show (trackNumber) and nothing else: the same audio, title and details. For when
+the importer gave songs the wrong numbers (archive-imports-log.md: every song of a show numbered 1).
 
 Add --handle thunderbird.cafe (or a DID) to any of them for another account; the default is pyxorium.com, where the
 importer keeps its songs.
 
-Deleting needs an app password for that account, taken from $env:BSKY_APP_PASSWORD (one per task, deleted after):
+Deleting and renumbering need an app password for that account, taken from $env:BSKY_APP_PASSWORD (one per task, deleted after):
 
     $env:BSKY_APP_PASSWORD = Read-Host "App password"
 
@@ -273,8 +277,66 @@ def delete(args, out=print, env=os.environ, ask=input):
     return gone
 
 
+SET_RE = re.compile(r'^([A-Za-z0-9._~:-]{1,512})=([0-9]{1,4})$')
+
+
+def renumber(args, out=print, env=os.environ, ask=input):
+    """Give tracks new place numbers (trackNumber), keeping everything else in each record as it is."""
+    if not args.set:
+        raise Stop('Say which tracks and numbers: --set KEY=NUMBER (one or more; the keys are in list).')
+    wanted = {}
+    for item in args.set:
+        m = SET_RE.match(item.strip())
+        if not m or int(m.group(2)) < 1:
+            raise Stop(f'"{item}" should look like 3n2fs32ydht2f=2 (a record key, =, a number from 1).')
+        if m.group(1) in wanted:
+            raise Stop(f'{m.group(1)} is named twice.')
+        wanted[m.group(1)] = int(m.group(2))
+    acct = account(resolve_did(args.handle))
+    found = []
+    for k, n in wanted.items():
+        try:
+            found.append((xrpc(acct['pds'], 'com.atproto.repo.getRecord', {'repo': acct['did'], 'collection': COLLECTION, 'rkey': k}), n))
+        except Stop as err:
+            if getattr(err, 'status', None) in (400, 404):
+                raise Stop(f'@{acct["handle"]} has no audio track with the key {k}.')
+            raise
+    changes = [(r, n) for r, n in found if (r.get('value') or {}).get('trackNumber') != n]
+    out(f'Renumbering on @{acct["handle"]}:')
+    for r, n in found:
+        v = r.get('value') or {}
+        old = v.get('trackNumber')
+        note = f'{old} -> {n}' if old != n else f'{n} (already)'
+        out(f'  {note:>12}  {v.get("title") or "(no title)"}  [{rkey_of(r)}]')
+    if not changes:
+        out('\nNothing to change.')
+        return []
+    if args.dry_run:
+        out(f'\nDry run: nothing was changed ({len(changes)} would be).')
+        return []
+    token = sign_in(acct, env)
+    if ask(f'Change {len(changes)} track number{"s" if len(changes) != 1 else ""}? [y/N] ').strip().lower() not in ('y', 'yes'):
+        out('Stopped; nothing was changed.')
+        return []
+    done = []
+    for r, n in changes:
+        k = rkey_of(r)
+        before = dict(r.get('value') or {})
+        after = dict(before, trackNumber=n)
+        xrpc(acct['pds'], 'com.atproto.repo.putRecord', token=token, data={
+            'repo': acct['did'], 'collection': COLLECTION, 'rkey': k, 'record': after, 'swapRecord': r.get('cid'), 'validate': False})
+        back = (xrpc(acct['pds'], 'com.atproto.repo.getRecord', {'repo': acct['did'], 'collection': COLLECTION, 'rkey': k}).get('value') or {})
+        # The server hands records back in its own field order: compare field by field.
+        if back.get('trackNumber') != n or {f: x for f, x in back.items() if f != 'trackNumber'} != {f: x for f, x in before.items() if f != 'trackNumber'}:
+            raise Stop(f'{k} reads back differently from what was written: look at it in PDSls. ({len(done)} changed before it.)')
+        done.append(k)
+        out(f'  {k} is now {n}')
+    out(f'Changed {len(done)} (each read back with the new number, everything else the same).')
+    return done
+
+
 def parser():
-    p = argparse.ArgumentParser(prog='audio_track.py', description='List and delete audio tracks (cafe.thunderbird.audio.track).')
+    p = argparse.ArgumentParser(prog='audio_track.py', description='List, delete and renumber audio tracks (cafe.thunderbird.audio.track).')
     sub = p.add_subparsers(dest='command', required=True)
     def common(s):
         s.add_argument('--handle', default=DEFAULT_HANDLE, help=f'the account (a handle or DID; default {DEFAULT_HANDLE})')
@@ -286,6 +348,10 @@ def parser():
     s.add_argument('--album', default=None, help='every track whose album is exactly this')
     s.add_argument('--dry-run', action='store_true', help='show what would be deleted, delete nothing')
     common(s)
+    s = sub.add_parser('renumber', help="set tracks' place numbers (trackNumber), after asking")
+    s.add_argument('--set', action='append', help='KEY=NUMBER: a track\'s key (see list) and its new number; repeat for more')
+    s.add_argument('--dry-run', action='store_true', help='show what would change, change nothing')
+    common(s)
     return p
 
 
@@ -296,7 +362,7 @@ def main(argv=None):
         pass
     args = parser().parse_args(argv)
     try:
-        {'list': show_list, 'delete': delete}[args.command](args)
+        {'list': show_list, 'delete': delete, 'renumber': renumber}[args.command](args)
         return 0
     except Stop as err:
         print(f'\n{err}', file=sys.stderr)

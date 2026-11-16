@@ -6,7 +6,7 @@ writes them (songs from the Live Music Archive, converted once to Opus in WebM);
 them; later, Raku will play one on its own.
 
 This repo holds the audio family's lexicons (`cafe.thunderbird.audio.*`, published from thunderbird.cafe), the script
-that publishes them, and a small Python script that lists and deletes track records. The Foundry (writing) and Raku
+that publishes them, and a small Python script that lists, deletes and renumbers track records. The Foundry (writing) and Raku
 (reading) both use it; neither owns it.
 
 ## The record: `cafe.thunderbird.audio.track`
@@ -72,9 +72,9 @@ Each lexicon is written as a `com.atproto.lexicon.schema` record in thunderbird.
 when it is new or changed, and read back to check. The app password comes from `$env:BSKY_APP_PASSWORD`, or is asked
 for. `published.json` records what was published: commit it.
 
-## Listing and deleting tracks (`scripts/audio_track.py`)
+## Listing, deleting and renumbering tracks (`scripts/audio_track.py`)
 
-Python 3, standard library only. Deleting needs an app password for the account in this terminal (one per task,
+Python 3, standard library only. Deleting and renumbering need an app password for the account in this terminal (one per task,
 deleted after); listing and dry runs don't:
 
 ```
@@ -83,11 +83,14 @@ python scripts/audio_track.py list --album "Galactic · Moguls · 1997-08-15"
 python scripts/audio_track.py delete --rkey 3m… --rkey 3m… --dry-run
 $env:BSKY_APP_PASSWORD = Read-Host "App password"
 python scripts/audio_track.py delete --album "Galactic · Moguls · 1997-08-15"
+python scripts/audio_track.py renumber --set 3m…=1 --set 3m…=2 --dry-run
 ```
 
 - `list` shows an account's tracks grouped by album, each with its length, file size and key.
 - `delete` removes tracks by key (`--rkey`, repeatable) or every track of one album (`--album`, matched exactly),
   after showing them and asking "Really delete them?"; each is read back to check it's gone.
+- `renumber` sets tracks' place numbers (`trackNumber`) by key, `--set KEY=NUMBER` (repeatable), after showing
+  old and new and asking; nothing else in the record changes, and each is read back to check.
 - The default account is pyxorium.com; `--handle thunderbird.cafe` (or a DID) works on another.
 - Deleting a track doesn't touch tapes made from it: a tape keeps its own copy of the song.
 
@@ -108,6 +111,6 @@ computer (127.0.0.1).
 |---|---|
 | `lexicons/` | the lexicons, one file each, named by NSID |
 | `scripts/publish-lexicons.mjs` | publishes them from thunderbird.cafe |
-| `scripts/audio_track.py` | lists and deletes track records |
+| `scripts/audio_track.py` | lists, deletes and renumbers track records |
 | `published.json` | what was published (written by the publish script) |
 | `test/` | `publish-lexicons.test.mjs` (Node), `test_audio_track.py` (Python) |

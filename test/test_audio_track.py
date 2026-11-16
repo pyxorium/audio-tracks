@@ -37,6 +37,8 @@ class World:
         }
         self.calls = []
         self.keep_after_delete = False
+        self.garble_put = False          # store something other than what putRecord was sent
+        self.puts = 0
         world = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -81,7 +83,21 @@ class World:
                     r = world.records.get((q['repo'], q['collection'], q['rkey']))
                     if not r:
                         return self.answer({'error': 'RecordNotFound', 'message': 'Could not locate record'}, 400)
-                    return self.answer({'uri': f"at://{q['repo']}/{q['collection']}/{q['rkey']}", **r})
+                    # like Bluesky's PDS: the record handed back in its own field order
+                    value = dict(reversed(list(r['value'].items())))
+                    return self.answer({'uri': f"at://{q['repo']}/{q['collection']}/{q['rkey']}", 'cid': r['cid'], 'value': value})
+                if name == 'com.atproto.repo.putRecord':
+                    if self.headers.get('Authorization') != f"Bearer jwt-{data['repo']}":
+                        return self.answer({'error': 'AuthRequired'}, 401)
+                    key = (data['repo'], data['collection'], data['rkey'])
+                    if key not in world.records or data.get('swapRecord') != world.records[key]['cid']:
+                        return self.answer({'error': 'InvalidSwap', 'message': 'Record was at a different CID'}, 400)
+                    world.puts += 1
+                    value = dict(data['record'])
+                    if world.garble_put:
+                        value['title'] = 'Something else'
+                    world.records[key] = {'cid': f'bafyreiput{world.puts}', 'value': value}
+                    return self.answer({'uri': f'at://{key[0]}/{key[1]}/{key[2]}', 'cid': world.records[key]['cid']})
                 if name == 'com.atproto.repo.listRecords':
                     keys = sorted([k for k in world.records if k[0] == q['repo'] and k[1] == q['collection']], key=lambda k: k[2], reverse=True)
                     start = int(q.get('cursor') or 0)
@@ -212,6 +228,67 @@ class AudioTrackTest(unittest.TestCase):
         with self.assertRaises(at.Stop) as caught:
             self.run_quiet(at.delete, self.args(['delete', '--rkey', '3mzaaa']), env=self.env, ask=lambda q: 'y')
         self.assertIn('still reads back', str(caught.exception))
+
+    def puts(self):
+        return [c for c in self.w.calls if c[0] == 'POST' and c[1].endswith('putRecord')]
+
+    def test_renumber_dry_run_changes_nothing_and_needs_no_password(self):
+        _, said = self.run_quiet(at.renumber, self.args(['renumber', '--set', '3mzaaa=1', '--set', '3mzbbb=7', '--dry-run']),
+                                 env={}, ask=lambda q: self.fail('no question'))
+        self.assertIn('3 -> 1  Funky Bird  [3mzaaa]', said)
+        self.assertIn('7 (already)  Tchefuncte  [3mzbbb]', said)
+        self.assertIn('Dry run: nothing was changed (1 would be).', said)
+        self.assertEqual(self.puts(), [])
+
+    def test_renumber_changes_only_the_number_and_reads_back(self):
+        before = {k: dict(v['value']) for k, v in self.w.records.items()}
+        done, said = self.run_quiet(at.renumber, self.args(['renumber', '--set', '3mzaaa=1', '--set', '3mzbbb=2', '--set', '3mzccc=1']),
+                                    env=self.env, ask=lambda q: 'y')
+        self.assertEqual(done, ['3mzaaa', '3mzbbb'], 'the one already at its number is left alone')
+        for rkey, n in (('3mzaaa', 1), ('3mzbbb', 2)):
+            now = self.w.records[(ME, at.COLLECTION, rkey)]['value']
+            self.assertEqual(now['trackNumber'], n)
+            self.assertEqual({f: x for f, x in now.items() if f != 'trackNumber'},
+                             {f: x for f, x in before[(ME, at.COLLECTION, rkey)].items() if f != 'trackNumber'}, 'same audio, title and details')
+        self.assertEqual(self.w.records[(ME, at.COLLECTION, '3mzccc')]['cid'], 'bafyreic', 'untouched')
+        for c in self.puts():
+            self.assertEqual((c[3]['repo'], c[3]['collection'], c[3]['validate']), (ME, at.COLLECTION, False))
+            self.assertTrue(c[3]['swapRecord'].startswith('bafyrei'))
+            self.assertEqual(c[4], f'Bearer jwt-{ME}')
+        self.assertIn('Changed 2', said)
+
+    def test_renumber_no_stops_and_nothing_to_change(self):
+        done, said = self.run_quiet(at.renumber, self.args(['renumber', '--set', '3mzaaa=1']), env=self.env, ask=lambda q: 'n')
+        self.assertEqual((done, self.puts()), ([], []))
+        self.assertIn('Stopped; nothing was changed.', said)
+        _, said = self.run_quiet(at.renumber, self.args(['renumber', '--set', '3mzaaa=3']), env=self.env, ask=lambda q: self.fail('no question'))
+        self.assertIn('Nothing to change.', said)
+
+    def test_renumber_mistakes_stop_with_a_plain_message(self):
+        cases = [
+            (['renumber'], 'Say which tracks and numbers'),
+            (['renumber', '--set', '3mzaaa'], 'should look like'),
+            (['renumber', '--set', '3mzaaa=0'], 'should look like'),
+            (['renumber', '--set', '3mzaaa=two'], 'should look like'),
+            (['renumber', '--set', '3mzaaa=1', '--set', '3mzaaa=2'], 'named twice'),
+            (['renumber', '--set', '3mzzzz=1'], 'has no audio track with the key 3mzzzz'),
+        ]
+        for argv, words in cases:
+            with self.subTest(argv=argv):
+                with self.assertRaises(at.Stop) as caught:
+                    self.run_quiet(at.renumber, self.args(argv), env=self.env, ask=lambda q: 'y')
+                self.assertIn(words, str(caught.exception))
+        with self.assertRaises(at.Stop) as caught:
+            self.run_quiet(at.renumber, self.args(['renumber', '--set', '3mzaaa=1']), env={}, ask=lambda q: 'y')
+        self.assertIn('Read-Host "App password"', str(caught.exception))
+        self.assertEqual(self.puts(), [])
+
+    def test_renumber_reports_a_record_that_reads_back_differently(self):
+        self.w.garble_put = True
+        with self.assertRaises(at.Stop) as caught:
+            self.run_quiet(at.renumber, self.args(['renumber', '--set', '3mzaaa=1', '--set', '3mzbbb=2']), env=self.env, ask=lambda q: 'y')
+        self.assertIn('3mzaaa reads back differently', str(caught.exception))
+        self.assertEqual(len(self.puts()), 1, 'stops at the first')
 
     def test_https_only(self):
         with self.assertRaises(at.Stop):
